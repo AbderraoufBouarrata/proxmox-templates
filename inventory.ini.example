@@ -4,5 +4,5 @@ pve ansible_host=192.168.1.1 ansible_user=root
 [proxmox:vars]
 # Login user in every VM.
 ci_user=ubuntu
-# Password for ci_user in every VM (Proxmox console, Cockpit). SSH stays key-only.
+# Password for ci_user in every VM: SSH without your key, Proxmox console, Cockpit.
 ci_password=change-me

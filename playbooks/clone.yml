@@ -1,6 +1,6 @@
 # Clones the template into a new VM with its own static IP.
 # Usage:
-#   ansible-playbook -i inventory.ini clone.yml \
+#   ansible-playbook -i inventory.ini playbooks/clone.yml \
 #     -e vmid=101 -e name=web01 -e ip=192.168.1.50/24 -e gw=192.168.1.1 \
 #     [-e cores=4 -e memory=4096 -e disk=32G] [-e template_id=9998 for Docker]
 - hosts: proxmox

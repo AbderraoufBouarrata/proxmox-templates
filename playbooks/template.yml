@@ -1,5 +1,5 @@
 # Builds Ubuntu Server LTS cloud-init templates on Proxmox: plain and with Docker.
-# Usage: ansible-playbook -i inventory.ini template.yml
+# Usage: ansible-playbook -i inventory.ini playbooks/template.yml
 - hosts: proxmox
   vars:
       templates:
@@ -34,7 +34,9 @@
             mode: "0600"
 
       # No --cores/--memory: Proxmox defaults apply, set real sizes per clone.
-      # All templates: grow a copy of the image, install the QEMU guest agent.
+      # All templates: grow a copy of the image, install the QEMU guest agent, and allow SSH
+      # password login (the cloud image's 60-cloudimg-settings.conf turns it off; sshd keeps
+      # the first value it reads, so 50- wins). SSH tries your key first, then asks for the password.
       # Docker templates: docker.io + compose plugin, size-capped container logs, and
       # the cloud-init user added to the docker group on each clone's first boot.
       # GUI template: also Cockpit (web UI on :9090, socket enabled at boot) + Navigator.
@@ -49,7 +51,8 @@
             # Cloud image root is ~4G and nearly full: grow it so packages fit.
             qemu-img resize "$img" +4G
             args=(--run-command 'growpart /dev/sda 1 && resize2fs /dev/sda1'
-              --install qemu-guest-agent)
+              --install qemu-guest-agent
+              --append-line '/etc/ssh/sshd_config.d/50-password-auth.conf:PasswordAuthentication yes')
             {% if item.docker %}
             args+=(--install docker.io,docker-compose-v2
               --write '/etc/docker/daemon.json:{"log-driver": "local"}'
