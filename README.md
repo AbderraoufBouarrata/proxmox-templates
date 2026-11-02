@@ -2,6 +2,8 @@
 
 Ansible playbooks that build Ubuntu Server LTS cloud-init templates on Proxmox and clone VMs from them.
 
+https://github.com/user-attachments/assets/08c50b4f-c8a0-438e-a959-f1d7be02f365
+
 ## Requirements
 
 - Ansible on your machine
