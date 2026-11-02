@@ -1,0 +1,27 @@
+# Clones the template into a new VM with its own static IP.
+# Usage:
+#   ansible-playbook -i inventory.ini clone.yml \
+#     -e vmid=101 -e name=web01 -e ip=192.168.1.50/24 -e gw=192.168.1.1 \
+#     [-e cores=4 -e memory=4096 -e disk=32G] [-e template_id=9998 for Docker]
+- hosts: proxmox
+  vars:
+    template_id: 9999
+    cores: 2
+    memory: 2048
+    disk: 20G
+
+  tasks:
+    - name: Require vmid, name, ip, gw
+      ansible.builtin.assert:
+        that: [vmid is defined, name is defined, ip is defined, gw is defined]
+        fail_msg: "Pass -e vmid=... -e name=... -e ip=x.x.x.x/24 -e gw=x.x.x.x"
+
+    - name: Clone, size, set IP, start
+      ansible.builtin.shell: |
+        set -e
+        qm clone {{ template_id }} {{ vmid }} --name {{ name }} --full
+        qm set {{ vmid }} --cores {{ cores }} --memory {{ memory }} --ipconfig0 ip={{ ip }},gw={{ gw }}
+        qm resize {{ vmid }} scsi0 {{ disk }}
+        qm start {{ vmid }}
+      args:
+        executable: /bin/bash

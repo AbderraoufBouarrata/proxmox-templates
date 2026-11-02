@@ -1,0 +1,85 @@
+# Builds Ubuntu Server LTS cloud-init templates on Proxmox: plain and with Docker.
+# Usage: ansible-playbook -i inventory.ini template.yml
+- hosts: proxmox
+  vars:
+      templates:
+          - { id: 9999, name: ubuntu, docker: false, cockpit: false }
+          - { id: 9998, name: ubuntu-docker, docker: true, cockpit: false }
+          - { id: 9997, name: ubuntu-docker-gui, docker: true, cockpit: true }
+      ubuntu_release: resolute # 26.04 LTS
+      # 45Drives ships no 26.04 build; the jammy one is a plain cockpit plugin (deps: cockpit, python3, rsync, zip, file).
+      navigator_deb: https://repo.45drives.com/enterprise/ubuntu/pool/main/c/cockpit-navigator/cockpit-navigator_0.5.10-1jammy_amd64.deb
+      storage: local-lvm
+      bridge: vmbr0
+      ssh_pubkey: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
+      image_url: "https://cloud-images.ubuntu.com/{{ ubuntu_release }}/current/{{ ubuntu_release }}-server-cloudimg-amd64.img"
+      image_path: "/var/lib/vz/template/iso/{{ ubuntu_release }}-server-cloudimg-amd64.img"
+
+  tasks:
+      - name: Download Ubuntu cloud image
+        ansible.builtin.get_url:
+            url: "{{ image_url }}"
+            dest: "{{ image_path }}"
+            checksum: "sha256:https://cloud-images.ubuntu.com/{{ ubuntu_release }}/current/SHA256SUMS"
+
+      - name: Install virt-customize
+        ansible.builtin.apt:
+            name: libguestfs-tools
+            update_cache: true
+
+      - name: Write SSH key for cloud-init
+        ansible.builtin.copy:
+            content: "{{ ssh_pubkey }}\n"
+            dest: /tmp/template-sshkey.pub
+            mode: "0600"
+
+      # No --cores/--memory: Proxmox defaults apply, set real sizes per clone.
+      # All templates: grow a copy of the image, install the QEMU guest agent.
+      # Docker templates: docker.io + compose plugin, size-capped container logs, and
+      # the cloud-init user added to the docker group on each clone's first boot.
+      # GUI template: also Cockpit (web UI on :9090, socket enabled at boot) + Navigator.
+      # An existing template with the same VMID is destroyed and rebuilt, so rerunning
+      # always gives a fresh image. Refuses if the VMID is a regular VM, not a template.
+      - name: Build (or rebuild) templates
+        ansible.builtin.shell: |
+            set -e
+            img=/tmp/{{ item.name }}.img
+            trap 'rm -f "$img"' EXIT
+            cp {{ image_path }} "$img"
+            # Cloud image root is ~4G and nearly full: grow it so packages fit.
+            qemu-img resize "$img" +4G
+            args=(--run-command 'growpart /dev/sda 1 && resize2fs /dev/sda1'
+              --install qemu-guest-agent)
+            {% if item.docker %}
+            args+=(--install docker.io,docker-compose-v2
+              --write '/etc/docker/daemon.json:{"log-driver": "local"}'
+              --run-command 'mkdir -p /var/lib/cloud/scripts/per-instance && printf "#!/bin/sh\nusermod -aG docker {{ ci_user }}\n" > /var/lib/cloud/scripts/per-instance/docker-group.sh && chmod +x /var/lib/cloud/scripts/per-instance/docker-group.sh')
+            {% endif %}
+            {% if item.cockpit %}
+            args+=(--install cockpit
+              --run-command 'curl -fsSL -o /tmp/navigator.deb {{ navigator_deb }} && DEBIAN_FRONTEND=noninteractive apt-get install -y /tmp/navigator.deb && rm /tmp/navigator.deb'
+              --run-command 'systemctl enable cockpit.socket')
+            {% endif %}
+            virt-customize -a "$img" "${args[@]}" --truncate /etc/machine-id
+            if qm status {{ item.id }} >/dev/null 2>&1; then
+              qm config {{ item.id }} | grep -q '^template: 1' \
+                || { echo "VMID {{ item.id }} is not a template, refusing to destroy it" >&2; exit 1; }
+              qm destroy {{ item.id }}
+            fi
+            # cpu host: real CPU features (fast AES for VPN/TLS); fine on a single node, blocks
+            # live migration to hosts with a different CPU.
+            qm create {{ item.id }} --name {{ item.name }} --ostype l26 --cpu host --agent 1 \
+              --net0 virtio,bridge={{ bridge }} --scsihw virtio-scsi-single \
+              --serial0 socket --vga serial0
+            qm set {{ item.id }} --scsi0 {{ storage }}:0,import-from="$img",discard=on,iothread=1,ssd=1
+            qm set {{ item.id }} --ide2 {{ storage }}:cloudinit --boot order=scsi0 \
+              --ciuser {{ ci_user }} --cipassword "$CI_PASSWORD" --sshkeys /tmp/template-sshkey.pub --ipconfig0 ip=dhcp
+            qm template {{ item.id }}
+        args:
+            executable: /bin/bash
+        # Via env, not inline: keeps the password out of the command Ansible prints on failure.
+        environment:
+            CI_PASSWORD: "{{ ci_password }}"
+        loop: "{{ templates }}"
+        loop_control:
+            label: "{{ item.name }}"
